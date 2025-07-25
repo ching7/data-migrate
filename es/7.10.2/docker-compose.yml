@@ -1,0 +1,21 @@
+services:
+  logstash:
+    image: artifacts.iflytek.com/docker-repo/library/logstash:5.6.3 # 使用与源ES兼容的版本
+    container_name: logstash-es-migration
+    volumes:
+      - ./logstash.conf:/usr/share/logstash/pipeline/logstash.conf
+      - ./logs:/usr/share/logstash/logs # 新增：日志文件映射到本地
+    environment:
+      LS_JAVA_OPTS: "-Xmx1g -Xms1g"
+      pipeline.workers: 4
+      pipeline.batch.size: 5000
+      pipeline.batch.delay: 50
+      queue.type: persisted
+      queue.max_bytes: 1gb
+    command: logstash -f /usr/share/logstash/pipeline/logstash.conf
+    networks:
+      - es-net
+
+networks:
+  es-net:
+    driver: bridge
