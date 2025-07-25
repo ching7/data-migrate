@@ -2,9 +2,12 @@
 
 # 配置参数（按照实际情况调整）
 SOURCE_ES="http://172.30.32.170:9220"
+SOURCE_ES_USER=""       # 源ES用户名，无密码填空 ""
+SOURCE_ES_PASSWORD="" # 源ES密码，无密码填空 ""
 TARGET_ES="http://172.30.32.170:9221"
+TARGET_ES_USER=""       # 目标ES用户名，无密码填空 ""
+TARGET_ES_PASSWORD="" # 目标ES密码，无密码填空 ""
 INDEX="aicc-test-seatcallrecord143" #需要迁移的索引
-SOURCE_TYPE="SEATCALLRECORD" # 源es 5.X索引文档类型
 TIME_FIELD="callStartTime"  # 时间字段（按实际字段调整）
 BATCH_DAYS=30  # 每批迁移30天数据
 TOTAL_MONTHS=2  # 总迁移6个月数据
@@ -49,7 +52,18 @@ echo "===== 开始导出源索引映射 =====" >> $LOG_FILE
 MAPPING_FILE="$BASE_DIR/${INDEX}_mapping.json"
 TMP_MAPPING_FILE="$BASE_DIR/${INDEX}_transformed_mapping.json"
 touch $MAPPING_FILE $TMP_MAPPING_FILE
-curl -s -XGET "$SOURCE_ES/$INDEX/_mapping?pretty" -o $MAPPING_FILE
+# 构建curl认证参数
+build_auth_params() {
+    local user="$1"
+    local password="$2"
+    if [ -n "$user" ] && [ -n "$password" ]; then
+        echo "-u $user:$password"
+    else
+        echo ""
+    fi
+}
+AUTH_PARAMS=$(build_auth_params "$SOURCE_ES_USER" "$SOURCE_ES_PASSWORD")
+curl $AUTH_PARAMS -s -XGET "$SOURCE_ES/$INDEX/_mapping?pretty" -o $MAPPING_FILE
 if [ $? -ne 0 ] || [ ! -s $MAPPING_FILE ]; then
     echo "映射导出失败或文件为空" >> $LOG_FILE
     exit 1
@@ -58,7 +72,7 @@ echo "映射导出成功：$MAPPING_FILE" >> $LOG_FILE
 # 添加JSON结构转换步骤
 echo "===== 开始转换映射结构 =====" >> $LOG_FILE
 # 使用变量替换硬编码的索引名和类型
-jq --arg idx "$INDEX" --arg type "$SOURCE_TYPE" '{"mappings": .[$idx].mappings[$type]}' "$MAPPING_FILE" > "$TMP_MAPPING_FILE"
+jq --arg idx "$INDEX" '{"mappings": .[$idx].mappings | to_entries[0].value}' "$MAPPING_FILE" > "$TMP_MAPPING_FILE"
 if [ $? -ne 0 ] || [ ! -s $TMP_MAPPING_FILE ]; then
     echo "JSON结构转换失败或文件为空" >> $LOG_FILE
     exit 1
@@ -66,7 +80,7 @@ fi
 echo "映射结构转换成功：$TMP_MAPPING_FILE" >> $LOG_FILE
 # 导入映射到目标索引
 echo "===== 开始导入映射到目标索引 =====" >> $LOG_FILE
- # 检查目标索引是否存在
+# 检查目标索引是否存在
 INDEX_EXISTS=$(curl -s -o /dev/null -w "%{http_code}" "$TARGET_ES/$INDEX")
 if [ "$INDEX_EXISTS" -eq 200 ]; then
     echo "目标索引 $INDEX 已存在." >> $LOG_FILE
@@ -110,13 +124,43 @@ while true; do
     fi
     chmod -R 777 $BASE_DIR
     # ===== 2. 替换Logstash配置文件变量 =====
+    # 构建Logstash配置的条件变量
+    IF_SOURCE_ES_USER_DEFINED=""
+    IF_SOURCE_ES_PASSWORD_DEFINED=""
+    IF_TARGET_ES_USER_DEFINED=""
+    IF_TARGET_ES_PASSWORD_DEFINED=""
+    
+    if [ -n "$SOURCE_ES_USER" ] && [ -n "$SOURCE_ES_PASSWORD" ]; then
+        IF_SOURCE_ES_USER_DEFINED=""
+        IF_SOURCE_ES_PASSWORD_DEFINED=""
+    else
+        IF_SOURCE_ES_USER_DEFINED="#"
+        IF_SOURCE_ES_PASSWORD_DEFINED="#"
+    fi
+    
+    if [ -n "$TARGET_ES_USER" ] && [ -n "$TARGET_ES_PASSWORD" ]; then
+        IF_TARGET_ES_USER_DEFINED=""
+        IF_TARGET_ES_PASSWORD_DEFINED=""
+    else
+        IF_TARGET_ES_USER_DEFINED="#"
+        IF_TARGET_ES_PASSWORD_DEFINED="#"
+    fi
+    
     sed -e "s|%{START_TIME}|$current_start|g" \
         -e "s|%{END_TIME}|$current_end|g" \
         -e "s|%{BATCH_STATS_FILE}|$BATCH_STATS_NAME|g" \
         -e "s|%{SOURCE_ES}|$SOURCE_ES|g" \
+        -e "s|%{SOURCE_ES_USER}|$SOURCE_ES_USER|g" \
+        -e "s|%{SOURCE_ES_PASSWORD}|$SOURCE_ES_PASSWORD|g" \
         -e "s|%{INDEX}|$INDEX|g" \
         -e "s|%{TARGET_ES}|$TARGET_ES|g" \
+        -e "s|%{TARGET_ES_USER}|$TARGET_ES_USER|g" \
+        -e "s|%{TARGET_ES_PASSWORD}|$TARGET_ES_PASSWORD|g" \
         -e "s|%{TYPE}|$TYPE|g" \
+        -e "s|%{IF_SOURCE_ES_USER_DEFINED}|$IF_SOURCE_ES_USER_DEFINED|g" \
+        -e "s|%{IF_SOURCE_ES_PASSWORD_DEFINED}|$IF_SOURCE_ES_PASSWORD_DEFINED|g" \
+        -e "s|%{IF_TARGET_ES_USER_DEFINED}|$IF_TARGET_ES_USER_DEFINED|g" \
+        -e "s|%{IF_TARGET_ES_PASSWORD_DEFINED}|$IF_TARGET_ES_PASSWORD_DEFINED|g" \
         "$LOGSTASH_CONF_TEMPLATE" > "$LOGSTASH_CONF"    
 
     # ===== 3. 启动Logstash迁移当前批次 =====
