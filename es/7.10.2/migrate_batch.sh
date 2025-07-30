@@ -5,8 +5,8 @@ SOURCE_ES="http://172.30.32.170:9220"
 SOURCE_ES_USER=""       # 源ES用户名，无密码填空 ""
 SOURCE_ES_PASSWORD="" # 源ES密码，无密码填空 ""
 TARGET_ES="http://172.30.32.170:9221"
-TARGET_ES_USER=""       # 目标ES用户名，无密码填空 ""
-TARGET_ES_PASSWORD="" # 目标ES密码，无密码填空 ""
+TARGET_ES_USER="myuser"       # 目标ES用户名，无密码填空 ""
+TARGET_ES_PASSWORD="mypassword" # 目标ES密码，无密码填空 ""
 INDEX="aicc-test-seatcallrecord143" #需要迁移的索引
 TIME_FIELD="callStartTime"  # 时间字段（按实际字段调整）
 BATCH_DAYS=30  # 每批迁移30天数据
@@ -63,6 +63,8 @@ build_auth_params() {
     fi
 }
 AUTH_PARAMS=$(build_auth_params "$SOURCE_ES_USER" "$SOURCE_ES_PASSWORD")
+# 添加目标ES认证参数
+TARGET_AUTH_PARAMS=$(build_auth_params "$TARGET_ES_USER" "$TARGET_ES_PASSWORD")
 curl $AUTH_PARAMS -s -XGET "$SOURCE_ES/$INDEX/_mapping?pretty" -o $MAPPING_FILE
 if [ $? -ne 0 ] || [ ! -s $MAPPING_FILE ]; then
     echo "映射导出失败或文件为空" >> $LOG_FILE
@@ -81,13 +83,13 @@ echo "映射结构转换成功：$TMP_MAPPING_FILE" >> $LOG_FILE
 # 导入映射到目标索引
 echo "===== 开始导入映射到目标索引 =====" >> $LOG_FILE
 # 检查目标索引是否存在
-INDEX_EXISTS=$(curl -s -o /dev/null -w "%{http_code}" "$TARGET_ES/$INDEX")
+INDEX_EXISTS=$(curl $TARGET_AUTH_PARAMS -s -o /dev/null -w "%{http_code}" "$TARGET_ES/$INDEX")
 if [ "$INDEX_EXISTS" -eq 200 ]; then
     echo "目标索引 $INDEX 已存在." >> $LOG_FILE
 else
-    curl -s -XPUT "$TARGET_ES/$INDEX" -H 'Content-Type: application/json' -d @$TMP_MAPPING_FILE
+    curl $TARGET_AUTH_PARAMS -s -XPUT "$TARGET_ES/$INDEX" -H 'Content-Type: application/json' -d @$TMP_MAPPING_FILE
     if [ $? -ne 0 ]; then
-        echo "映射导入失败" >> $LOG_FILE
+        echo "映射导入失败" >> $LOG_FILE    
         exit 1
     fi
     echo "映射导入成功" >> $LOG_FILE
@@ -200,7 +202,7 @@ while true; do
 
         while read -r id; do
             VAL_START=$(date +%s)
-            if curl -s "$TARGET_ES/$INDEX/$TYPE/$id" | jq -e '.found == true' > /dev/null; then
+            if curl $TARGET_AUTH_PARAMS -s "$TARGET_ES/$INDEX/$TYPE/$id" | jq -e '.found == true' > /dev/null; then
                 echo "[验证成功] ID $id 耗时 $(( $(date +%s) - VAL_START )) 秒" >> $LOG_FILE
                 SUCCESS=$((SUCCESS + 1))
             else
